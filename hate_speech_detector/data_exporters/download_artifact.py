@@ -6,9 +6,6 @@ DEFAULT_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
 DESTINATION_PATH_BEST_MODEL = os.getenv(
     "DESTINATION_PATH_BEST_MODEL", "/data/best_model/"
 )
-DESTINATION_PATH_BEST_CV = os.getenv(
-    "DESTINATION_PATH_BEST_CV", "/data/cv/cv_best_model.pkl"
-)
 
 mlflow.set_tracking_uri(DEFAULT_TRACKING_URI)
 
@@ -32,7 +29,7 @@ def export_data(response, training_set, *args, **kwargs):
     best_exist, best_model_uri = response
 
     if best_exist:
-        X, y, _, _, _, _, cv = training_set["build"]
+        X, y, _, _, _, _, = training_set["build"]
         mlflow.artifacts.download_artifacts(
             artifact_uri=best_model_uri, dst_path=DESTINATION_PATH_BEST_MODEL
         )
@@ -45,7 +42,7 @@ def export_data(response, training_set, *args, **kwargs):
         joblib.dump(
             model, DESTINATION_PATH_BEST_MODEL + "/model/best_model_fittedX.pkl"
         )
-        joblib.dump(cv, DESTINATION_PATH_BEST_CV)
+        
 
     return True
     # Specify your data exporting logic here

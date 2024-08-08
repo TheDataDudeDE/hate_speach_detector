@@ -1,7 +1,6 @@
 from typing import Dict, Tuple, Union
 
-from pandas import Series
-from scipy.sparse._csr import csr_matrix
+from pandas import Series, DataFrame
 from sklearn.base import BaseEstimator
 
 
@@ -12,8 +11,7 @@ if "data_exporter" not in globals():
 @data_exporter
 def register(
     settings: Tuple[
-        Dict[str, Union[bool, float, int, str]],
-        csr_matrix,
+        DataFrame,
         Series,
         BaseEstimator,
     ],

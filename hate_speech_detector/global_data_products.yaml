@@ -1,13 +1,6 @@
-data_training_set_sklearn:
+training_data:
   object_type: pipeline
-  object_uuid: data_pipeline_sklearn
+  object_uuid: data_pipeline
   repo_path: /home/src/hate_speech_detector
   settings:
-    build:
-      partitions: 1
-model_sklearn_estimator:
-  object_type: pipeline
-  object_uuid: model_pipeline_sklearn
-  repo_path: /home/src/hate_speech_detector
-  settings:
-    sklearn: {}
+    build: {}

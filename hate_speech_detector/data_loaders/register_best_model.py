@@ -8,7 +8,7 @@ if "test" not in globals():
     from mage_ai.data_preparation.decorators import test
 
 DEFAULT_EXPERIMENT_NAME = os.getenv(
-    "DEFAULT_EXPERIMENT_NAME", "hatespeech_clf_tuning_optuna"
+    "DEFAULT_EXPERIMENT_NAME", "hate_speech"
 )
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
 

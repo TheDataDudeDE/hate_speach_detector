@@ -1,9 +1,10 @@
 pandas
 nltk
 hyperopt
+emoji
 numpy
 scikit-learn
-mlflow
+mlflow=2.14.1
 flask
 requests
 optuna

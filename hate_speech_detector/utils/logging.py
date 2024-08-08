@@ -1,23 +1,31 @@
 import os
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple
+import pandas as pd
 
 import mlflow
-import numpy as np
-import pandas as pd
 from mlflow.data import from_numpy, from_pandas
-from mlflow.entities import DatasetInput, InputTag, Run
 from mlflow.models import infer_signature
 from mlflow.sklearn import log_model as log_model_sklearn
 from sklearn.base import BaseEstimator
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import cross_val_score
 
+from sklearn.naive_bayes import BernoulliNB, ComplementNB, MultinomialNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import (
+    RandomForestClassifier,
+    AdaBoostClassifier,
+    VotingClassifier,
+)
+from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
+
 DEFAULT_DEVELOPER = os.getenv("EXPERIMENTS_DEVELOPER", "mager")
-DEFAULT_EXPERIMENT_NAME = "hate_speech_mage"
+DEFAULT_EXPERIMENT_NAME = "hate_speech"
 DEFAULT_TRACKING_URI = (
     "postgresql+psycopg2://"
     "hatespeechadmin:admin0815!"
-    "@hate-speech-pg.postgres.database.azure.com:5432/mlflow"
+    "@hate-speech-pg.postgres.database.azure.com:5432/mlflow_dev"
 )
 
 DEFAULT_ARTIFACT_LOCATION = os.getenv(
@@ -49,12 +57,14 @@ def setup_experiment(
 
 def launch_objective(X_train, y_train, X_test, y_test):
     client, experiment_id = setup_experiment(
-        experiment_name="hatespeech_clf_tuning_optuna",
+        experiment_name=DEFAULT_EXPERIMENT_NAME,
         tracking_uri=DEFAULT_TRACKING_URI,
     )
 
     def objective(trial):
         # Suggest values for hyperparameters
+
+        # DecisionTree
         criterion = trial.suggest_categorical("criterion", ["gini", "entropy"])
         splitter = trial.suggest_categorical("splitter", ["best", "random"])
         max_depth = trial.suggest_int("max_depth", 1, 50)
@@ -70,7 +80,7 @@ def launch_objective(X_train, y_train, X_test, y_test):
         )
 
         # Initialize the classifier
-        clf = DecisionTreeClassifier(
+        dt_clf = DecisionTreeClassifier(
             criterion=criterion,
             splitter=splitter,
             max_depth=max_depth,
@@ -81,169 +91,101 @@ def launch_objective(X_train, y_train, X_test, y_test):
             random_state=42,
         )
 
-        # Cross-validation
-        scores = cross_val_score(clf, X_train, y_train, cv=5)
-        accuracy_train = scores.mean()
+        # KNN
+        knn_n_neighbors = trial.suggest_int("n_neighbors", 1, 30)
+        knn_weights = trial.suggest_categorical(
+            "weights", ["uniform", "distance"]
+        )
+        knn_p = trial.suggest_int("p", 1, 2)
 
-        clf.fit(X_train, y_train)
-        accuracy_test = clf.score(X_test, y_test)
+        nn_clf = KNeighborsClassifier(
+            n_neighbors=knn_n_neighbors, weights=knn_weights, p=knn_p, n_jobs=-1
+        )
+
+        # RF
+        rf_n_estimators = trial.suggest_int("n_estimators", 10, 200)
+        rf_max_depth = trial.suggest_int("max_depth", 2, 32)
+        rf_min_samples_split = trial.suggest_int("min_samples_split", 2, 20)
+        rf_min_samples_leaf = trial.suggest_int("min_samples_leaf", 1, 20)
+        rf_bootstrap = trial.suggest_categorical("bootstrap", [True, False])
+        rf_clf = RandomForestClassifier(
+            n_estimators=rf_n_estimators,
+            max_depth=rf_max_depth,
+            min_samples_split=rf_min_samples_split,
+            min_samples_leaf=rf_min_samples_leaf,
+            bootstrap=rf_bootstrap,
+            n_jobs=-1,
+        )
+
+        # ADA
+        ada_n_estimators = trial.suggest_int("n_estimators", 10, 200)
+        ada_learning_rate = trial.suggest_float(
+            "learning_rate", 0.01, 1.0, log=True
+        )
+
+        ada_clf = AdaBoostClassifier(
+            n_estimators=ada_n_estimators,
+            learning_rate=ada_learning_rate,
+            random_state=42,
+        )
+
+        classifiers = {
+            "KNeighborsClassifier": nn_clf,
+            "DecisionTreeClassifier": dt_clf,
+            "RandomForestClassifier": rf_clf,
+            "AdaBoostClasifier": ada_clf,
+        }
+
+        voting_clf = VotingClassifier(
+            estimators=list(classifiers.items()), voting="hard"
+        )
+
+        # Fit the VotingClassifier
+        voting_clf.fit(X_train, y_train)
+        voting_predictions = voting_clf.predict(X_test)
+        accuracy_test = voting_clf.score(X_test, y_test)
+
+        individual_predictions = {
+            name: clf.predict(X_test)
+            for name, clf in voting_clf.named_estimators_.items()
+        }
+
+        # Combine predictions into a DataFrame for easier viewing
+        predictions_df = pd.DataFrame(individual_predictions)
+        predictions_df["VotingClassifier"] = voting_predictions
+        predictions_df["True Labels"] = y_test
+
+        # Cross-validation
+        scores = cross_val_score(voting_clf, X_train, y_train, cv=5)
+        accuracy_train = scores.mean()
 
         with mlflow.start_run(experiment_id=experiment_id):
             mlflow.log_params(
                 {
-                    "criterion": criterion,
-                    "splitter": splitter,
-                    "max_depth": max_depth,
-                    "min_samples_split": min_samples_split,
-                    "min_samples_leaf": min_samples_leaf,
-                    "max_features": max_features,
-                    "max_leaf_nodes": max_leaf_nodes,
+                    "dt.criterion": criterion,
+                    "dt.splitter": splitter,
+                    "dt.max_depth": max_depth,
+                    "dt.min_samples_split": min_samples_split,
+                    "dt.min_samples_leaf": min_samples_leaf,
+                    "dt.max_features": max_features,
+                    "dt.max_leaf_nodes": max_leaf_nodes,
+                    "knn.n_neighbors": knn_n_neighbors,
+                    "knn.weights": knn_weights,
+                    "knn.p": knn_p,
+                    "rf.n_estimators": rf_n_estimators,
+                    "rf.max_depth": rf_max_depth,
+                    "rf.min_samples_split": rf_min_samples_split,
+                    "rf.min_samples_leaf": rf_min_samples_leaf,
+                    "rf.boostrap": rf_bootstrap,
+                    "ada.n_estimators": ada_n_estimators,
+                    "ada.learning_rate": ada_learning_rate,
                 }
             )
             mlflow.log_metric("accuracy_train", accuracy_train)
             mlflow.log_metric("accuracy_test", accuracy_test)
-            log_model_sklearn(clf, "model")
+            log_model_sklearn(voting_clf, "model")
 
-            trial.set_user_attr("classifier", clf)
+            trial.set_user_attr("classifier", voting_clf)
         return accuracy_train
 
     return objective
-
-
-def track_experiment(
-    experiment_name: Optional[str] = None,
-    block_uuid: Optional[str] = None,
-    developer: Optional[str] = None,
-    hyperparameters: Dict[str, Union[float, int, str]] = {},
-    metrics: Dict[str, float] = {},
-    model: Optional[Union[BaseEstimator]] = None,
-    partition: Optional[str] = None,
-    pipeline_uuid: Optional[str] = None,
-    predictions: Optional[np.ndarray] = None,
-    run_name: Optional[str] = None,
-    tracking_uri: Optional[str] = None,
-    training_set: Optional[pd.DataFrame] = None,
-    training_targets: Optional[pd.Series] = None,
-    track_datasets: bool = False,
-    validation_set: Optional[pd.DataFrame] = None,
-    validation_targets: Optional[pd.Series] = None,
-    verbosity: Union[
-        bool, int
-    ] = True,  # False by default or else it creates too many logs
-    **kwargs,
-) -> Run:
-    experiment_name = experiment_name or DEFAULT_EXPERIMENT_NAME
-    tracking_uri = tracking_uri or DEFAULT_TRACKING_URI
-
-    client, experiment_id = setup_experiment(experiment_name, tracking_uri)
-
-    if not run_name:
-        run_name = ":".join(
-            [str(s) for s in [pipeline_uuid, partition, block_uuid] if s]
-        )
-
-    with mlflow.start_run(experiment_id, run_name=run_name or None) as run:
-        print("storing run_id: ", run.info.run_id)
-
-        for key, value in [
-            ("developer", developer or DEFAULT_DEVELOPER),
-            ("model", model.__class__.__name__),
-        ]:
-            if value is not None:
-                mlflow.set_tag(key, value)
-
-        for key, value in [
-            ("block_uuid", block_uuid),
-            ("partition", partition),
-            ("pipeline_uuid", pipeline_uuid),
-        ]:
-            if value is not None:
-                mlflow.log_param(key, value)
-
-        for key, value in hyperparameters.items():
-            mlflow.log_param(key, value)
-            if verbosity:
-                print(f"Logged hyperparameter {key}: {value}.")
-
-        for key, value in metrics.items():
-            mlflow.log_metric(key, value)
-            if verbosity:
-                print(f"Logged metric {key}: {value}.")
-
-        dataset_inputs = []
-
-        # This increases memory too much.
-        if track_datasets:
-            for dataset_name, dataset, tags in [
-                ("dataset", training_set, dict(context="training")),
-                (
-                    "targets",
-                    (
-                        training_targets.to_numpy()
-                        if training_targets is not None
-                        else None
-                    ),
-                    dict(context="training"),
-                ),
-                ("dataset", validation_set, dict(context="validation")),
-                (
-                    "targets",
-                    (
-                        validation_targets.to_numpy()
-                        if validation_targets is not None
-                        else None
-                    ),
-                    dict(context="validation"),
-                ),
-                ("predictions", predictions, dict(context="training")),
-            ]:
-                if dataset is None:
-                    continue
-
-                dataset_from = None
-                if isinstance(dataset, pd.DataFrame):
-                    dataset_from = from_pandas
-                elif isinstance(dataset, np.ndarray):
-                    dataset_from = from_numpy
-
-                if dataset_from:
-                    ds = dataset_from(
-                        dataset, name=dataset_name
-                    )._to_mlflow_entity()
-                    ds_input = DatasetInput(
-                        ds, tags=[InputTag(k, v) for k, v in tags.items()]
-                    )
-                    dataset_inputs.append(ds_input)
-
-                if verbosity:
-                    context = tags["context"]
-                    if dataset_from:
-                        print(f"Logged input for {context} {dataset_name}.")
-                    else:
-                        print(
-                            f"Unable to log input for {context} {dataset_name},"
-                            f"{type(dataset)} not registered."
-                        )
-
-            if len(dataset_inputs) >= 1:
-                mlflow.log_inputs(dataset_inputs)
-
-        if model:
-            log_model = None
-
-            if isinstance(model, BaseEstimator):
-                log_model = log_model_sklearn
-
-            if log_model:
-                opts = dict(artifact_path="models", input_example=None)
-
-                if training_set is not None and predictions is not None:
-                    opts["signature"] = infer_signature(
-                        training_set, predictions
-                    )
-
-                log_model(model, **opts)
-                if verbosity:
-                    print(f"Logged model {model.__class__.__name__}.")
-
-    return run
